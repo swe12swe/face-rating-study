@@ -178,7 +178,7 @@
       <div class="field-label">请对照纸条依次输入 6 位身份码</div>
       <input type="text" id="codeInput" inputmode="text" autocomplete="off"
              spellcheck="false" placeholder="6 位身份码" />
-      <div class="code-hint">仅允许大写字母与数字（完成后自动显示为 X-X-X-X-X-X）</div>
+      <div class="code-hint">仅允许数字与大写字母（请将身份码<strong>复制粘贴</strong>于此区域，完成后自动显示为 X-X-X-X-X-X）</div>
     </div>
 
     <div class="card">
@@ -249,42 +249,39 @@
  * ================================================================ */
 
 /* 1) 合法字符集与数值映射
- *    - 数字 2~9 保留原值；
- *    - 字母 A=2、B=3 依次递增；剔除 I、O（数字也不含 0、1）。
- *    数字与字母【各自从 2 开始】：2 与 A 同为 2、3 与 B 同为 3……
+ *    - 仅数字与大写字母；排除 I、E、O 与 0；
+ *    - 数字 1~9 保留原值；
+ *    - 字母按合法字母表顺序递增映射：A=2、B=3 …… Z=24。
  */
-const DIGIT_CHARS = "23456789";
-const LETTER_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ"; // 已剔除 I、O
+const DIGIT_CHARS = "123456789";
+const LETTER_CHARS = "ABCDFGHJKLMNPQRSTUVWXYZ"; // A~Z 剔除 E、I、O，共 23 个
 const VALID_CHARS = DIGIT_CHARS + LETTER_CHARS;
 
 const CHAR_VALUE = {};
-for (let i = 0; i < DIGIT_CHARS.length; i++) CHAR_VALUE[DIGIT_CHARS[i]] = i + 2; // 2→2 ... 9→9
-for (let i = 0; i < LETTER_CHARS.length; i++) CHAR_VALUE[LETTER_CHARS[i]] = i + 2; // A→2 ... Z→25
+for (let i = 0; i < DIGIT_CHARS.length; i++) CHAR_VALUE[DIGIT_CHARS[i]] = i + 1; // 1→1 ... 9→9
+for (let i = 0; i < LETTER_CHARS.length; i++) CHAR_VALUE[LETTER_CHARS[i]] = i + 2; // A→2 ... Z→24
 
-/* 2) 身份码长度 */
+/* 2) 身份码长度（前 5 位数据位 + 第 6 位校验位） */
 const CODE_LENGTH = 6;
 
-/* 3) 分组判定公式：G = 1*Num(C1) + 3*Num(C3) + 5*Num(C5)
- *    下标对应去除横杠后的字符位置（0 基）：C1=0，C3=2，C5=4
+/* 3) 分组判定（隐蔽）：前 5 位为数据位
+ *    加权和 S = C1*2 + C2*3 + C3*4 + C4*5 + C5*6
+ *    S % 3 === 0 → 低分组；=== 1 → 中性组；=== 2 → 高分组
  */
-const GROUP_WEIGHTS = [
-  { pos: 0, w: 1 },  // C1
-  { pos: 2, w: 3 },  // C3
-  { pos: 4, w: 5 }   // C5
-];
-const GROUP_THRESHOLD = 126; // G < 126 低分组；G >= 126 高分组
+const DATA_WEIGHTS = [2, 3, 4, 5, 6]; // 依次作用于第 1~5 位
+const GROUP_MOD = 3;
+const GROUP_MAP = { 0: "low", 1: "neutral", 2: "high" };
 
-/* 4) 全局校验公式（保留自实验设计，全部 6 位参与）：
- *    Check = 1*C1 + 2*C2 + ... + 6*C6，Check % 7 必须为 0。
- *    与前期发放的纸质编号一一对应；若不再需要可设为 null 关闭。
+/* 4) 校验位规则：第 6 位为校验位
+ *    其数值必须等于（前 5 位加权和 S）% 10；
+ *    不匹配 → 阻断并提示“身份码校验失败，请核对输入”。
  */
-const CHECK_MOD = 7;
-const CHECK_REMAINDER = 0;
+const CHECK_DIGIT_MOD = 10;
 
-/* 5) 五维评价维度（名称与顺序固定，勿改） */
+/* 5) 五维评价维度（雷达图显示名；第 2 维缩短为“五官比例”防止标签换行被截断） */
 const DIMENSIONS = [
   "面部对称性",
-  "五官比例协调性",
+  "五官比例",
   "皮肤质感状态",
   "面部轮廓规整度",
   "五官精致度"
@@ -293,31 +290,38 @@ const DIMENSIONS = [
 /* 6) 全国同龄大学生常模均值（雷达图参考基线，固定） */
 const NORM_MEAN = [6.0, 6.1, 5.9, 6.0, 6.0];
 
-/* 7) 两组总体得分区间（从五维均值推导后夹紧到该区间，保留 1 位小数） */
+/* 7) 三组总体得分区间（从五维均值推导后夹紧到该区间，保留 1 位小数） */
 const OVERALL_RANGE = {
-  low:  { min: 4.0, max: 5.2 },
-  high: { min: 7.8, max: 9.0 }
+  low:     { min: 4.0, max: 5.2 },
+  neutral: { min: 5.8, max: 7.2 },
+  high:    { min: 7.8, max: 9.0 }
 };
 
-/* 8) 两组五维随机生成规则（详见下方 generateDimensions）
+/* 8) 三组五维随机生成规则（详见下方 generateDimensions）
  *    - 高分组：整体高于常模；随机 1~2 个维度明显拔尖，其余略高于或接近常模；
+ *    - 中性组：各维度围绕常模小幅波动，无明显方向性；
  *    - 低分组：整体低于常模；最多 1 个维度达到常模，其余低于常模。
  */
 const HIGH_PEAK = { minAdd: 1.4, maxAdd: 2.2 };  // 高分组拔尖维度：常模 + [1.4, 2.2]
 const HIGH_REST = { minAdd: 0.1, maxAdd: 0.8 };  // 高分组其余维度：常模 + [0.1, 0.8]
+const NEUTRAL_JITTER = 0.4;                      // 中性组：各维度在常模 ±0.4 内波动
 const LOW_NORM_JITTER = 0.1;                     // 低分组“达到常模”维度的抖动范围
 const LOW_BELOW = { minSub: 0.7, maxSub: 1.6 };  // 低分组其余维度：常模 - [0.7, 1.6]
 const SCORE_CAP = 9.6;                           // 单维度上限，避免图形顶满
 
-/* 9) 两组预设评价文案 */
+/* 9) 三组预设评价文案 */
 const TEXT_BANK = {
   low: {
     headline: "整体表现低于同龄常模，各维度分布均衡",
     body: "综合五项结构指标，本次测评显示该面部样本在面部对称性、五官比例协调性、皮肤质感状态、面部轮廓规整度与五官精致度上的整体表现低于全国同龄大学生常模均值，各维度分布较为均衡，未呈现明显的单一维度优势。需说明的是，面部审美评价具有较强的情境性与个体差异，本报告仅反映样本在当前标准化评价框架下的相对位置。"
   },
+  neutral: {
+    headline: "整体表现处于同龄常模区间，各维度分布均衡",
+    body: "综合五项结构指标，本次测评显示该面部样本在面部对称性、五官比例协调性、皮肤质感状态、面部轮廓规整度与五官精致度上的整体表现处于全国同龄大学生常模区间，各维度分布均衡，与同龄群体平均水平基本一致。需说明的是，面部审美评价具有较强的情境性与个体差异，本报告仅反映样本在当前标准化评价框架下的相对位置。"
+  },
   high: {
     headline: "整体表现高于同龄常模，结构协调、发展均衡",
-    body: "综合五项结构指标，本次测评显示该面部样本在面部对称性、五官比例协调性、皮肤质感状态、面部轮廓规整度与五官精致度上的整体表现高于全国同龄大学生常模均值，各维度发展均衡，呈现较为协调、规整的面部结构特征。该结果反映该样本在当前标准化评价框架下处于相对优势位置。需说明的是，面部审美评价具有较强的情境性与个体差异，本结果应在标准化情境下审慎解读。"
+    body: "综合五项结构指标，本次测评显示该面部样本在面部对称性、五官比例协调性、皮肤质感状态、面部轮廓规整度与五官精致度上的整体表现高于全国同龄大学生常模均值，各维度发展均衡，呈现较为协调、规整的面部结构特征。需说明的是，面部审美评价具有较强的情境性与个体差异，本报告仅反映样本在当前标准化评价框架下的相对位置。"
   }
 };
 
@@ -343,7 +347,8 @@ const TYPER_PAUSE = { countMin: 1, countMax: 2, durMin: 1000, durMax: 2000 };   
 /* 11) 提示文案 */
 const MSG = {
   noPhoto: "请上传照片后再开始分析",
-  badCode: "请输入正确的6位身份码"
+  badCode: "请输入正确的6位身份码",
+  checkFail: "身份码校验失败，请核对输入"
 };
 
 /* ================================================================
@@ -377,19 +382,23 @@ function numOf(ch) {
   return Object.prototype.hasOwnProperty.call(CHAR_VALUE, ch) ? CHAR_VALUE[ch] : null;
 }
 
-/** 全局校验：Check = Σ (i+1)*Num(Ci)，Check % 7 === 0 */
-function checkCode(code) {
-  if (CHECK_MOD == null) return true;
-  let sum = 0;
-  for (let i = 0; i < code.length; i++) sum += (i + 1) * numOf(code[i]);
-  return (sum % CHECK_MOD) === CHECK_REMAINDER;
+/** 前 5 位数据位加权和：S = C1*2 + C2*3 + C3*4 + C4*5 + C5*6 */
+function dataSum(code) {
+  let s = 0;
+  for (let i = 0; i < 5; i++) s += DATA_WEIGHTS[i] * numOf(code[i]);
+  return s;
 }
 
-/** 分组判定（仅第 1、3、5 位加权）：G < 126 低分组，G >= 126 高分组 */
+/** 校验位核验：第 6 位数值必须等于 S % 10，不匹配则阻断 */
+function checkCode(code) {
+  const expected = dataSum(code) % CHECK_DIGIT_MOD;
+  return numOf(code[5]) === expected;
+}
+
+/** 分组判定（隐蔽）：S % 3 → 0 低分组 / 1 中性组 / 2 高分组 */
 function calcGroup(code) {
-  let g = 0;
-  for (const item of GROUP_WEIGHTS) g += item.w * numOf(code[item.pos]);
-  return { group: g < GROUP_THRESHOLD ? "low" : "high", g: g };
+  const s = dataSum(code);
+  return { group: GROUP_MAP[s % GROUP_MOD], g: s };
 }
 
 /** 按分组规则生成五维数据（以身份码为种子的确定性随机） */
@@ -418,8 +427,15 @@ function generateDimensions(code, group) {
       }
       values[i] = round1(Math.min(v, SCORE_CAP));
     }
+  } else if (group === "neutral") {
+    // 中性组：各维度围绕常模小幅波动，无明显方向性
+    for (let i = 0; i < n; i++) {
+      const norm = NORM_MEAN[i];
+      const v = norm + (rnd() * 2 - 1) * NEUTRAL_JITTER;
+      values[i] = round1(v);
+    }
   } else {
-    // 最多 1 个维度达到常模水平，其余低于常模
+    // 低分组：最多 1 个维度达到常模水平，其余低于常模
     const allowNormDim = rnd() < 0.5; // 一半概率出现 1 个“达标”维度
     const normIdx = Math.floor(rnd() * n);
     for (let i = 0; i < n; i++) {
@@ -670,8 +686,8 @@ analyzeBtn.addEventListener("click", function () {
   if (!isCodeFull()) { showHint(MSG.badCode); return; }
 
   const code = rawCode();
-  // 全局校验公式（Check % 7）：编号非法时视为格式错误
-  if (!checkCode(code)) { showHint(MSG.badCode); return; }
+  // 校验位核验：第 6 位与前 5 位算出的预期值不符 → 直接阻断
+  if (!checkCode(code)) { showHint(MSG.checkFail); return; }
 
   // 进入等待界面：进度条 + 打字机（总时长 8~12 秒随机）
   startWaiting(function () {
